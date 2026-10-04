@@ -1,0 +1,536 @@
+// Prisma schema for Pairly.
+// Consumer + creator flow are backed by these models this pass; business/admin
+// portals stay on lib/mock-data until their own pass.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Auth — Auth.js (next-auth v5) + @auth/prisma-adapter canonical shape, plus
+// a `password` field on User for the Credentials provider.
+// ---------------------------------------------------------------------------
+
+enum Role {
+  USER
+  CREATOR
+  BUSINESS
+  ADMIN
+}
+
+model User {
+  id               String    @id @default(cuid())
+  name             String?
+  email            String?   @unique
+  emailVerified    DateTime?
+  image            String?
+  password         String? // null for OAuth-only accounts
+  role             Role      @default(USER)
+  banned           Boolean   @default(false)
+  bio              String?
+  culture          Culture?  @relation(fields: [cultureSlug], references: [slug])
+  cultureSlug      String?
+  stripeCustomerId String?   @unique
+
+  accounts Account[]
+  sessions Session[]
+
+  cards             GreetingCard[]     @relation("CardCreator")
+  sentGreetings     SentGreeting[]     @relation("Sender")
+  receivedGreetings SentGreeting[]     @relation("Recipient")
+  giftCards         GiftCardInstance[]
+  savedMessages     SavedMessage[]
+  avatars           UserAvatar[]
+  notifications     Notification[]
+  reviews           Review[]
+  orders            Order[]
+  subscription      Subscription?
+  payouts           Payout[]
+  favorites         Favorite[]
+  cardViews         CardView[]
+  supportTickets    SupportTicket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Taxonomy — admin-editable lookup tables (not Postgres enums, so new
+// occasions/cultures don't require a migration).
+// ---------------------------------------------------------------------------
+
+model Occasion {
+  slug   String @id
+  name   String
+  icon   String
+  blurb  String
+  accent String
+
+  cards GreetingCard[]
+}
+
+model Culture {
+  slug  String @id
+  name  String
+  blurb String
+
+  cards GreetingCard[] @relation("CardCultures")
+  users User[]
+}
+
+// ---------------------------------------------------------------------------
+// Marketplace
+// ---------------------------------------------------------------------------
+
+enum CardStatus {
+  APPROVED
+  PENDING
+  REJECTED
+}
+
+enum AnimationStyle {
+  GENTLE_UNFOLD
+  CONFETTI_BURST
+  WARM_GLOW
+  FLOATING_PETALS
+  LANTERN_RISE
+}
+
+model GreetingCard {
+  id              String         @id @default(cuid())
+  slug            String         @unique
+  title           String
+  description     String
+  occasion        Occasion       @relation(fields: [occasionSlug], references: [slug])
+  occasionSlug    String
+  cultures        Culture[]      @relation("CardCultures")
+  tags            String[]
+  premium         Boolean        @default(false)
+  price           Decimal        @default(0) @db.Decimal(10, 2)
+  trending        Boolean        @default(false)
+  featured        Boolean        @default(false)
+  aiRecommended   Boolean        @default(false)
+  isNew           Boolean        @default(false)
+  rating          Float          @default(0)
+  reviewCount     Int            @default(0)
+  openSeconds     Int            @default(8)
+  paletteFrom     String
+  paletteTo       String
+  animationStyle  AnimationStyle @default(GENTLE_UNFOLD)
+  status          CardStatus     @default(APPROVED)
+  rejectionReason String?
+
+  // System-seeded card used only as the required `cardId` attachment point for
+  // /send/[type] quick-send flows — never shown in marketplace/browse/recommendation queries.
+  isQuickSendTemplate Boolean @default(false)
+
+  coverImageUrl    String? // S3 key for the creator-uploaded first-page/cover image; falls back to the palette gradient when unset
+  coverImageWidth  Int?
+  coverImageHeight Int?
+  contentImageUrl  String? // S3 key for the creator-uploaded second-page/content image; falls back to in-app palette+animation customization when unset
+
+  creator   User?   @relation("CardCreator", fields: [creatorId], references: [id])
+  creatorId String?
+
+  views     Int @default(0)
+  downloads Int @default(0)
+
+  sentGreetings SentGreeting[]
+  reviews       Review[]
+  favorites     Favorite[]
+  cardViews     CardView[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([occasionSlug])
+  @@index([creatorId])
+}
+
+// Browsing-history signal for personalized recommendations — one row per
+// card-detail-page view by a signed-in user.
+model CardView {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  card         GreetingCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId       String
+  occasionSlug String
+  cultureSlugs String[]
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([cardId])
+}
+
+model Review {
+  id        String       @id @default(cuid())
+  card      GreetingCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId    String
+  author    User         @relation(fields: [authorId], references: [id])
+  authorId  String
+  body      String
+  rating    Int
+  createdAt DateTime     @default(now())
+
+  @@index([cardId])
+}
+
+model Favorite {
+  id        String       @id @default(cuid())
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  card      GreetingCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId    String
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, cardId])
+  @@index([cardId])
+}
+
+// ---------------------------------------------------------------------------
+// Sending / receiving — the core transactional entity. A GreetingCard is a
+// catalog template; a SentGreeting is one personalized send of it.
+// ---------------------------------------------------------------------------
+
+enum SendStatus {
+  DRAFT
+  SCHEDULED
+  DELIVERED
+}
+
+enum DeliveryChannel {
+  EMAIL
+  SMS
+  LINK
+}
+
+model SentGreeting {
+  id       String @id @default(cuid())
+  sender   User   @relation("Sender", fields: [senderId], references: [id])
+  senderId String
+
+  card   GreetingCard @relation(fields: [cardId], references: [id])
+  cardId String
+
+  recipientName   String
+  recipientEmail  String
+  recipientPhone  String?
+  deliveryChannel DeliveryChannel @default(EMAIL)
+  recipient       User?           @relation("Recipient", fields: [recipientId], references: [id])
+  recipientId     String?
+
+  message      String?
+  textOverlays Json? // TextOverlay[] positioned on the card's cover image — see lib/store/wizard-store.ts
+  avatar       Json? // avatar builder config snapshot at send time
+  audioUrl     String?
+  videoUrl     String?
+  photoUrls String[]
+
+  giftCard GiftCardInstance?
+
+  status       SendStatus @default(DRAFT)
+  scheduledFor DateTime?
+  sentAt       DateTime?
+  openedAt     DateTime?
+  replyMessage String?
+  reactions    String[] // emoji reactions left by the recipient
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([senderId])
+  @@index([recipientEmail])
+}
+
+// ---------------------------------------------------------------------------
+// Gift cards
+// ---------------------------------------------------------------------------
+
+model GiftBrand {
+  id           String @id
+  name         String
+  category     String
+  gradientFrom String
+  gradientTo   String
+  amounts      Int[]
+
+  // Set only when synced from a live Tremendous catalog (see lib/tremendous.ts)
+  // — null means this brand is decorative/local-only and orders for it are
+  // simulated rather than placed with a real provider.
+  tremendousProductId String?
+
+  instances GiftCardInstance[]
+}
+
+enum GiftCardStatus {
+  AVAILABLE
+  SENT
+  REDEEMED
+}
+
+model GiftCardInstance {
+  id      String    @id @default(cuid())
+  brand   GiftBrand @relation(fields: [brandId], references: [id])
+  brandId String
+
+  amount Decimal        @db.Decimal(10, 2)
+  code   String         @unique @default(cuid())
+  status GiftCardStatus @default(AVAILABLE)
+
+  // Populated only when a real order was placed with Tremendous (see
+  // lib/tremendous.ts) — null means this instance is simulated/local-only.
+  tremendousOrderId  String?
+  tremendousRewardId String?
+  redemptionUrl      String? // one-time Tremendous claim link (LINK delivery) — hand this to the recipient, not shown again after creation
+
+  owner   User   @relation(fields: [ownerId], references: [id])
+  ownerId String
+
+  sentGreeting   SentGreeting? @relation(fields: [sentGreetingId], references: [id])
+  sentGreetingId String?       @unique
+
+  purchasedAt DateTime  @default(now())
+  redeemedAt  DateTime?
+
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// Billing — Stripe-backed orders and subscriptions.
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+model Order {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
+
+  stripePaymentIntentId String?     @unique
+  subtotal              Decimal     @db.Decimal(10, 2)
+  tax                   Decimal     @default(0) @db.Decimal(10, 2)
+  total                 Decimal     @db.Decimal(10, 2)
+  status                OrderStatus @default(PENDING)
+
+  items OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+enum OrderItemType {
+  CARD
+  GIFT_CARD
+  SUBSCRIPTION
+}
+
+model OrderItem {
+  id          String        @id @default(cuid())
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId     String
+  type        OrderItemType
+  description String
+  amount      Decimal       @db.Decimal(10, 2)
+  refId       String? // GreetingCard.id / GiftCardInstance.id / plan id, depending on type
+}
+
+model PricingPlan {
+  id          String  @id // "free" | "premium-monthly" | "premium-annual"
+  name        String
+  price       Decimal @db.Decimal(10, 2)
+  cadence     String
+  badge       String?
+  description String
+  cta         String
+  features    Json // [{ label, included }]
+
+  stripePriceId String?
+  subscriptions Subscription[]
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id])
+  userId String @unique
+
+  plan   PricingPlan @relation(fields: [planId], references: [id])
+  planId String
+
+  stripeSubscriptionId String?            @unique
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Per-user saved content
+// ---------------------------------------------------------------------------
+
+model SavedMessage {
+  id            String   @id @default(cuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  recipientName String
+  tone          String
+  body          String
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+model UserAvatar {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  name      String
+  config    Json // AvatarConfig snapshot — see lib/store/wizard-store.ts
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum NotificationType {
+  DELIVERY
+  GIFT
+  BILLING
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  title     String
+  body      String
+  type      NotificationType
+  link      String? // in-app path to navigate to when the notification is clicked, e.g. a sent card's detail page
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Site settings — admin-controlled feature flags, theme, and avatar config.
+// One JSON document per key ("features" | "theme" | "avatars"); see
+// lib/site-settings.ts for the shapes and defaults.
+// ---------------------------------------------------------------------------
+
+model SiteSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Support
+// ---------------------------------------------------------------------------
+
+enum TicketStatus {
+  OPEN
+  RESOLVED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model SupportTicket {
+  id      String @id @default(cuid())
+  user    User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId  String?
+  name    String
+  email   String
+  topic   String
+  message String
+
+  priority TicketPriority @default(MEDIUM)
+  status   TicketStatus   @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Creator payouts
+// ---------------------------------------------------------------------------
+
+enum PayoutStatus {
+  PAID
+  PROCESSING
+}
+
+model Payout {
+  id        String       @id @default(cuid())
+  creator   User         @relation(fields: [creatorId], references: [id])
+  creatorId String
+  amount    Decimal      @db.Decimal(10, 2)
+  status    PayoutStatus @default(PROCESSING)
+  method    String
+  createdAt DateTime     @default(now())
+
+  @@index([creatorId])
+}

@@ -1,0 +1,57 @@
+import type { PricingPlan } from "./types";
+
+export const pricingPlans: PricingPlan[] = [
+  {
+    id: "free",
+    name: "Free",
+    price: 0,
+    cadence: "forever",
+    description: "Try the magic before you commit.",
+    cta: "Start Free",
+    features: [
+      { label: "5 greeting cards / month", included: true },
+      { label: "Basic avatar customization", included: true },
+      { label: "Limited card previews", included: true },
+      { label: "AI message generator", included: false },
+      { label: "Voice cloning", included: false },
+      { label: "Premium templates", included: false },
+      { label: "Scheduled delivery", included: false },
+    ],
+  },
+  {
+    id: "premium-monthly",
+    name: "Premium Monthly",
+    price: 12,
+    cadence: "month",
+    badge: "Most Popular",
+    description: "Unlimited everything, billed monthly.",
+    cta: "Go Premium",
+    features: [
+      { label: "Unlimited greeting cards", included: true },
+      { label: "Unlimited premium templates", included: true },
+      { label: "Unlimited AI messages", included: true },
+      { label: "Unlimited voice messages", included: true },
+      { label: "Animated avatars", included: true },
+      { label: "Gift card support", included: true },
+      { label: "Scheduled delivery", included: true },
+      { label: "Priority support", included: true },
+    ],
+  },
+  {
+    id: "premium-annual",
+    name: "Premium Annual",
+    price: 96,
+    cadence: "year",
+    badge: "Best Value",
+    description: "Everything in Monthly, 2 months free.",
+    cta: "Go Annual",
+    features: [
+      { label: "Everything in Premium Monthly", included: true },
+      { label: "Exclusive seasonal collections", included: true },
+      { label: "VIP templates", included: true },
+      { label: "Early access to new features", included: true },
+      { label: "Family sharing (5 members)", included: true },
+      { label: "Priority rendering", included: true },
+    ],
+  },
+];
